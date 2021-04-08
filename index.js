@@ -91,5 +91,46 @@ module.exports = {
      */
     getStorageNoncePublicKey: function (endpoint) {
         return API.getStorageNoncePublicKey(endpoint)
+    },
+
+    /**
+     * Create a keychain and an access keychain using the initial passphrase
+     * @param {String | Uint8Array} passphrase Initial access passphrase
+     * @param {*} originPrivateKey Origin private key
+     * @returns Keychain transaction address
+     */
+    createKeychain: async function(passphrase, originPrivateKey) {
+        access_keychain_seed = Crypto.hash(passphrase)
+        const { publicKey } = Crypto.deriveKeyPair(access_keychain_seed, 0)
+
+        const keychain_seed = randomBytes(32)
+        const keychain_address = this.deriveAddress(keychain_seed, 0)
+
+        const access_keychain_aes_key = randomBytes(32)
+
+        const access_keychain_tx = this.newTransactionBuilder("keychain_access")
+            .setSecret(Crypto.aesEncrypt(keychain_address), access_keychain_aes_key)
+            .addAuthorizedKey(publicKey, Crypto.ecEncrypt(publicKey, access_keychain_aes_key))
+            .build(access_keychain_seed, 0)
+            .originSign(originPrivateKey)
+
+        const { publicKey: keychainPublicKey } = Crypto.deriveKeyPair(keychain_seed, 0)
+
+        const keychain_aes_key = randomBytes(32)
+
+        const keychain_tx = this.newTransactionBuilder("keychain")
+            .setSecret(Crypto.aesEncrypt(JSON.stringify({ keychain_seed: keychain_seed }), keychain_aes_key))
+            .addAuthorizedKey(publicKey, Crypto.ecEncrypt(keychain_aes_key), publicKey)
+            .addAuthorizedKey(keychainPublicKey, Crypto.ecEncrypt(keychain_aes_key, keychainPublicKey))
+            .build(keychain_seed, 0)
+            .originSign(originPrivateKey)
+
+
+        const [access_keychain_res, keychain_res] = await Promise.all([this.sendTransaction(access_keychain_tx), this.sendTransaction(keychain_tx)])
+        if (access_keychain_res.status == "ok" && keychain_res.status == "ok") {
+            return keychain_tx.address
+        } else {
+            throw "Something goes wrong !"
+        }
     }
 }
